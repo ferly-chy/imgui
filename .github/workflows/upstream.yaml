@@ -1,0 +1,109 @@
+name: Backup Fork and Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'https://github.com/ocornut/imgui.git' }}
+  MAIN_BRANCH: ${{ vars.MAIN_BRANCH || 'master' }}
+
+concurrency:
+  group: sync-fork
+  cancel-in-progress: false
+
+jobs:
+  backup-and-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || \
+          git remote set-url upstream "$UPSTREAM_REPO"
+
+          git fetch upstream --prune --tags
+          git fetch origin --prune --tags
+
+      - name: Tag pre-sync snapshot
+        run: |
+          TS=$(date -u +"%Y%m%d%H%M%S")
+          git tag -a "pre-sync-$TS" -m "Pre-sync snapshot ($TS)"
+          git push origin "pre-sync-$TS"
+
+      - name: Sync branches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          report="sync_report.md"
+          echo "# Sync Report" > $report
+          echo "" >> $report
+
+          mapfile -t branches < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin/ | sed 's|origin/||' | grep -v HEAD)
+
+          for branch in "${branches[@]}"; do
+            echo "🔄 Processing $branch"
+            echo "## $branch" >> $report
+
+            if git ls-remote --exit-code --heads upstream "$branch" >/dev/null 2>&1; then
+              
+              git switch -C "$branch" "origin/$branch"
+
+              if git merge --ff-only "upstream/$branch"; then
+                echo "✔ Fast-forwarded" | tee -a $report
+              else
+                echo "⚠ Non-fast-forward, attempting merge..." | tee -a $report
+
+                if git merge "upstream/$branch" --no-edit; then
+                  echo "✔ Merged successfully" | tee -a $report
+                else
+                  echo "❌ Conflict detected" | tee -a $report
+                  git merge --abort
+
+                  conflict_branch="${branch}-upstream"
+                  git switch -C "$conflict_branch" "upstream/$branch"
+                  git push origin "$conflict_branch"
+
+                  echo "➡ Created: $conflict_branch (manual review required)" | tee -a $report
+                  continue
+                fi
+              fi
+
+              git push origin "$branch"
+              echo "✔ Pushed" | tee -a $report
+
+            else
+              echo "⏭ No upstream branch" | tee -a $report
+            fi
+
+            echo "" >> $report
+          done
+
+      - name: Tag post-sync snapshot
+        run: |
+          TS=$(date -u +"%Y%m%d%H%M%S")
+          git tag -a "post-sync-$TS" -m "Post-sync snapshot ($TS)"
+          git push origin "post-sync-$TS"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-report
+          path: sync_report.md
