@@ -656,7 +656,7 @@ void ImDrawList::_OnChangedVtxOffset()
 int ImDrawList::_CalcCircleAutoSegmentCount(float radius) const
 {
     // Automatic segment count
-    const int radius_idx = (int)(radius + 0.999999f); // ceil to never reduce accuracy
+    const int radius_idx = (int)(radius + 0.999f); // ceil to never reduce accuracy
     if (radius_idx >= 0 && radius_idx < IM_COUNTOF(_Data->CircleSegmentCounts))
         return _Data->CircleSegmentCounts[radius_idx]; // Use cached value
     else
@@ -823,6 +823,11 @@ void ImDrawList::AddPolyline(const ImVec2* points, const int points_count, ImU32
     const ImVec2 opaque_uv = _Data->TexUvWhitePixel;
     const int count = closed ? points_count : points_count - 1; // The number of line segments we need to draw
     const bool thick_line = (thickness > _FringeScale);
+
+    // If this assert triggers on legacy code:
+    // - 1.92.8 (2025/05): swapped two last parameters order: flags, thickness --> thickness, flags. This should normally be caught by compile-time type-checking.
+    // - 1.92.8 (2025/05): changed value of ImDrawList_Closed which was previously guaranteed to be == 1. Hardcoded use of 1 or true should be replaced.
+    // Read more details near AddRect() + see "API BREAKING CHANGES" section for 1.82, 1.90 and 1.92.8.
     IM_ASSERT_USER_ERROR_RET((flags & ImDrawFlags_InvalidMask_) == 0, "Incorrect parameter. Did you swap 'thickness' and 'flags'?");
 
     if (Flags & ImDrawListFlags_AntiAliasedLines)
@@ -1475,27 +1480,24 @@ void ImDrawList::AddLine(const ImVec2& p1, const ImVec2& p2, ImU32 col, float th
 {
     if ((col & IM_COL32_A_MASK) == 0)
         return;
-    PathLineTo(p1 + ImVec2(0.5f, 0.5f));
-    PathLineTo(p2 + ImVec2(0.5f, 0.5f));
-    PathStroke(col, thickness);
+    const ImVec2 points[2] = { ImVec2(p1.x + 0.5f, p1.y + 0.5f), ImVec2(p2.x + 0.5f, p2.y + 0.5f) };
+    AddPolyline(points, 2, col, thickness);
 }
 
 void ImDrawList::AddLineH(float min_x, float max_x, float y, ImU32 col, float thickness)
 {
     if ((col & IM_COL32_A_MASK) == 0)
         return;
-    PathLineTo(ImVec2(min_x + 0.5f, y + 0.5f)); // Same as AddLine() above.
-    PathLineTo(ImVec2(max_x + 0.5f, y + 0.5f));
-    PathStroke(col, thickness);
+    const ImVec2 points[2] = { ImVec2(min_x + 0.5f, y + 0.5f), ImVec2(max_x + 0.5f, y + 0.5f) }; // Same as AddLine() above.
+    AddPolyline(points, 2, col, thickness);
 }
 
 void ImDrawList::AddLineV(float x, float min_y, float max_y, ImU32 col, float thickness)
 {
     if ((col & IM_COL32_A_MASK) == 0)
         return;
-    PathLineTo(ImVec2(x + 0.5f, min_y + 0.5f)); // Same as AddLine() above.
-    PathLineTo(ImVec2(x + 0.5f, max_y + 0.5f));
-    PathStroke(col, thickness);
+    const ImVec2 points[2] = { ImVec2(x + 0.5f, min_y + 0.5f), ImVec2(x + 0.5f, max_y + 0.5f) }; // Same as AddLine() above.
+    AddPolyline(points, 2, col, thickness);
 }
 
 // p_min = upper-left, p_max = lower-right
@@ -1503,13 +1505,14 @@ void ImDrawList::AddLineV(float x, float min_y, float max_y, ImU32 col, float th
 void ImDrawList::AddRect(const ImVec2& p_min, const ImVec2& p_max, ImU32 col, float rounding, float thickness, ImDrawFlags flags)
 {
     // If this assert triggers on legacy code:
-    // - 1.92.8 (2025/04): swapped two last parameters order: flags, thickness --> thickness, flags. This should normally be caught by compile-time type-checking. 
+    // - 1.92.8 (2025/05): swapped two last parameters order: flags, thickness --> thickness, flags. This should normally be caught by compile-time type-checking.
+    // - 1.92.8 (2025/05): changed value of ImDrawList_Closed which was previously guaranteed to be == 1. Hardcoded use of 1 or true should be replaced.
     // - 1.82.0 (2021/03): changed ImDrawCornerFlags to ImDrawFlags_RoundCornersXXX values.
     //   If you used hard-coded 1 to 15 or ~0 in flags to configure corner rounding use the new flags!
     //   - Hard coded support for ~0 == ImDrawFlags_RoundCornersAll.
     //   - Hard coded support for values 0x01 to 0x0F (matching 15 out of 16 old flags combinations) --> see FixRectCornerFlags() in <1.90 code.
     //   - Hard coded 0x00 with 'float rounding > 0.0f' --> replace with ImDrawFlags_RoundCornersNone or use 'float rounding = 0.0f'.
-    //   See "API BREAKING CHANGES" section for 1.82 and 1.90.
+    //   See "API BREAKING CHANGES" section for 1.82, 1.90 and 1.92.8.
     IM_ASSERT_USER_ERROR_RET((flags & ImDrawFlags_InvalidMask_) == 0, "Incorrect parameter. Did you swap 'thickness' and 'flags'?"); // Or misuse of legacy hard-coded ImDrawCornerFlags values
 
     if ((col & IM_COL32_A_MASK) == 0)
@@ -3149,8 +3152,10 @@ static void         Decode85(const unsigned char* src, unsigned char* dst)
         dst += 4;
     }
 }
-#ifndef IMGUI_DISABLE_DEFAULT_FONT
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_BITMAP)
 static const char* GetDefaultCompressedFontDataProggyClean(int* out_size);
+#endif
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_VECTOR)
 static const char* GetDefaultCompressedFontDataProggyForever(int* out_size);
 #endif
 
@@ -3175,7 +3180,7 @@ ImFont* ImFontAtlas::AddFontDefault(const ImFontConfig* font_cfg)
 // If you want a similar font which may be better scaled, consider using AddFontDefaultVector().
 ImFont* ImFontAtlas::AddFontDefaultBitmap(const ImFontConfig* font_cfg_template)
 {
-#ifndef IMGUI_DISABLE_DEFAULT_FONT
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_BITMAP)
     ImFontConfig font_cfg = font_cfg_template ? *font_cfg_template : ImFontConfig();
     if (!font_cfg_template)
         font_cfg.PixelSnapH = true; // Prevents sub-integer scaling factors at lower-level layers.
@@ -3196,14 +3201,14 @@ ImFont* ImFontAtlas::AddFontDefaultBitmap(const ImFontConfig* font_cfg_template)
     IM_ASSERT(0 && "Function is disabled in this build.");
     IM_UNUSED(font_cfg_template);
     return NULL;
-#endif // #ifndef IMGUI_DISABLE_DEFAULT_FONT
+#endif
 }
 
 // Load a minimal version of ProggyForever, designed to match our good old ProggyClean, but nicely scalable.
 // (See build script in https://github.com/ocornut/proggyforever for details)
 ImFont* ImFontAtlas::AddFontDefaultVector(const ImFontConfig* font_cfg_template)
 {
-#ifndef IMGUI_DISABLE_DEFAULT_FONT
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_VECTOR)
     ImFontConfig font_cfg = font_cfg_template ? *font_cfg_template : ImFontConfig();
     if (!font_cfg_template)
         font_cfg.PixelSnapH = true; // Precisely match ProggyClean, but prevents sub-integer scaling factors at lower-level layers.
@@ -3224,7 +3229,7 @@ ImFont* ImFontAtlas::AddFontDefaultVector(const ImFontConfig* font_cfg_template)
     IM_ASSERT(0 && "Function is disabled in this build.");
     IM_UNUSED(font_cfg_template);
     return NULL;
-#endif // #ifndef IMGUI_DISABLE_DEFAULT_FONT
+#endif
 }
 
 ImFont* ImFontAtlas::AddFontFromFileTTF(const char* filename, float size_pixels, const ImFontConfig* font_cfg_template, const ImWchar* glyph_ranges)
@@ -5759,8 +5764,13 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, Im
     if (glyph->Colored)
         col |= ~IM_COL32_A_MASK;
     float scale = (size >= 0.0f) ? (size / baked->Size) : 1.0f;
-    float x = IM_TRUNC(pos.x);
-    float y = IM_TRUNC(pos.y);
+    float x = pos.x;
+    float y = pos.y;
+    if ((draw_list->Flags & ImDrawListFlags_TextNoPixelSnap) == 0)
+    {
+        x = IM_TRUNC(x);
+        y = IM_TRUNC(y);
+    }
 
     float x1 = x + glyph->X0 * scale;
     float x2 = x + glyph->X1 * scale;
@@ -5792,12 +5802,17 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, Im
 // DO NOT CALL DIRECTLY THIS WILL CHANGE WILDLY IN 2026. Use ImDrawList::AddText().
 void ImFont::RenderText(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, ImDrawTextFlags flags)
 {
-    // Align to be pixel perfect
 begin:
-    float x = IM_TRUNC(pos.x);
-    float y = IM_TRUNC(pos.y);
+    // Align to be pixel perfect
+    float x = pos.x;
+    float y = pos.y;
     if (y > clip_rect.w)
         return;
+    if ((draw_list->Flags & ImDrawListFlags_TextNoPixelSnap) == 0)
+    {
+        x = IM_TRUNC(x);
+        y = IM_TRUNC(y);
+    }
 
     if (!text_end)
         text_end = text_begin + ImStrlen(text_begin); // ImGui:: functions generally already provides a valid text_end, so this is merely to handle direct calls.
@@ -6340,7 +6355,7 @@ static unsigned int stb_decompress(unsigned char *output, const unsigned char *i
 // Download and more information at https://github.com/bluescan/proggyfonts
 //-----------------------------------------------------------------------------
 
-#ifndef IMGUI_DISABLE_DEFAULT_FONT
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_BITMAP)
 
 // File: 'ProggyClean.ttf' (41208 bytes)
 // Exported using binary_to_compressed_c.exe -u8 "ProggyClean.ttf" proggy_clean_ttf
@@ -6520,6 +6535,7 @@ static const char* GetDefaultCompressedFontDataProggyClean(int* out_size)
     *out_size = proggy_clean_ttf_compressed_size;
     return (const char*)proggy_clean_ttf_compressed_data;
 }
+#endif // #if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_BITMAP)
 
 //-----------------------------------------------------------------------------
 // [SECTION] Default font data (ProggyForever-Regular-minimal.ttf)
@@ -6527,6 +6543,8 @@ static const char* GetDefaultCompressedFontDataProggyClean(int* out_size)
 // Based on ProggyForever: https://github.com/ocornut/proggyforever
 // MIT license / Copyright (c) 2026 Disco Hello, Copyright (c) 2019,2023 Tristan Grimmer
 //-----------------------------------------------------------------------------
+
+#if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_VECTOR)
 
 // File: 'output/ProggyForever-Regular-minimal.ttf' (18556 bytes)
 // Exported using binary_to_compressed_c.exe -u8 "output/ProggyForever-Regular-minimal.ttf" proggy_forever_minimal_ttf
@@ -6782,7 +6800,6 @@ static const char* GetDefaultCompressedFontDataProggyForever(int* out_size)
     *out_size = proggy_forever_minimal_ttf_compressed_size;
     return (const char*)proggy_forever_minimal_ttf_compressed_data;
 }
-
-#endif // #ifndef IMGUI_DISABLE_DEFAULT_FONT
+#endif // #if !defined(IMGUI_DISABLE_DEFAULT_FONT) && !defined(IMGUI_DISABLE_DEFAULT_FONT_VECTOR)
 
 #endif // #ifndef IMGUI_DISABLE
